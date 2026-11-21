@@ -81,8 +81,15 @@ class EventSettings:
 
 
 @dataclass(frozen=True)
+class SearchTurn:
+    index: int
+    arm: str
+
+
+@dataclass(frozen=True)
 class ExperimentSettings:
     repo: str
+    turn: SearchTurn | None
 
 
 @dataclass(frozen=True)
@@ -144,7 +151,10 @@ def load_config(config_path: Path) -> RetroSpeedlabConfig:
             sink=_optional_text(document.events.sink, "events.sink"),
             options=_mapping(document.events.options, "events.options"),
         ),
-        experiments=ExperimentSettings(repo=_text(document.experiments.repo, "experiments.repo")),
+        experiments=ExperimentSettings(
+            repo=_text(document.experiments.repo, "experiments.repo"),
+            turn=_search_turn(document.experiments.turn),
+        ),
         video=VideoSettings(
             encoder=_encoder(document.video.encoder),
             max_encoders=_positive_int(document.video.max_encoders, "video.max_encoders"),
@@ -158,6 +168,13 @@ def _game(collection: Path, slug: str, speedrun: Any) -> GameSettings:
     game = listed(games, slug)
     category = _text(speedrun.category, "speedrun.category")
     return GameSettings(game.slug, game.number, game.title, game.version, games.title, category)
+
+
+def _search_turn(value: Any) -> SearchTurn | None:
+    if value is None:
+        return None
+    turn = _mapping(value, "experiments.turn")
+    return SearchTurn(_count(turn["index"], "experiments.turn.index"), _text(turn["arm"], "experiments.turn.arm"))
 
 
 def _encoder(value: Any) -> Encoder:

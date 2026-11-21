@@ -159,7 +159,7 @@ and the shortest exit it found becomes a hint for the search.
 
 Each round's metrics are tracked in [Aim](https://aimstack.io), in the repository
 `experiments.repo` names (a local path or a remote `aim://` tracking server), one
-run per policy process in the release's experiment, and published as a
+`ppo_round` run per policy process in the release's experiment, and published as a
 `policy.rounds` event.
 
 ## Lab
@@ -198,6 +198,12 @@ wall time its worker spent on the job. A `found` or `improved` step names the jo
 steps have no worker and carry `null`.
 | `runs.records` | a new record that replays from power-on | `version`, `frames`, `seconds`, `pieces`, `previous_frames` |
 | `policy.rounds` | every PPO round | `run`, `round`, `steps`, `reward`, `exits`, `episodes`, `exit_rate`, `entropy`, `explained_variance`, `loss` |
+
+With `experiments.turn` set, the search also sums these events in memory and tracks them once a minute in a
+`search_turn` Aim run (params `game`, `game_version`, `release`, `turn`, `arm`, `workers`): `frames_saved`,
+`best_seconds`, `new_records`, `crossings`, `attempts_per_second`, `stuck_states`, and per worker kind, in the context
+`{"kind": role}`, `frames_saved_per_worker_second` and `worker_share`. Search turns and PPO runs also track the host's
+CPU, memory and GPU every 30 seconds.
 
 ## Live relay
 
@@ -269,7 +275,8 @@ when the configuration is loaded.
 | `video.encoder` | `libx264` encodes on the CPU, `h264_nvenc` on an NVIDIA GPU |
 | `video.max_encoders` | Encodes at once across every process on the host, below a GeForce's NVENC session limit |
 | `events.sink`, `events.options` | Event sink and its options; `null` publishes nothing |
-| `experiments.repo` | Aim repository of the policy runs: a local path or an `aim://` tracking server |
+| `experiments.repo` | Aim repository of the policy runs and search turns: a local path or an `aim://` tracking server |
+| `experiments.turn` | The rotation turn the search runs in, `index` and bandit `arm`; with a turn the search is tracked in Aim, `null` tracks nothing |
 | `log_level` | Loguru log level |
 
 ## Checks

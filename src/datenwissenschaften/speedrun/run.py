@@ -74,6 +74,7 @@ from datenwissenschaften.speedrun.stuck import (
     save_stuck,
     unbar,
 )
+from datenwissenschaften.speedrun.turn_tracking import tracked_events
 from datenwissenschaften.speedrun.turns import TURN_FILE, Turn, save_turn, turn_of
 from datenwissenschaften.speedrun.versions import retire_other_major, upgrade
 from datenwissenschaften.ui.relay import game_path, relay_key
@@ -459,7 +460,8 @@ def tas_run(wrapper: str, config: Path, pool: Executor, polishing: Executor) -> 
     game = settings.speedrun.game
     logger.info(f"Game package loaded: {game.id} {game.version} with {len(runner.classes)} states")
     journal = JournalStore(output / JOURNAL_FILE)
-    events = SearchEvents(load_events(settings.events), game.id, game.version, course.frame_rate)
+    published = tracked_events(settings, load_events(settings.events), course.frame_rate)
+    events = SearchEvents(published, game.id, game.version, course.frame_rate)
     feed = SpeedrunFeed(
         course,
         journal,

@@ -1,9 +1,11 @@
 import io
 import math
 import multiprocessing
+import signal
 import time
 from functools import partial
 from pathlib import Path
+from types import FrameType
 
 import aim
 import numpy as np
@@ -37,6 +39,7 @@ ENTROPY_WEIGHT = 0.01
 WAIT_SECONDS = 30.0
 POLICY_LOG = "policy.log"
 SPAWN = "spawn"
+SIGNAL_EXIT = 128
 ENTROPY_LOSS = "train/entropy_loss"
 EXPLAINED_VARIANCE = "train/explained_variance"
 LOSS = "train/loss"
@@ -176,7 +179,12 @@ def wait_for_start(output: Path) -> bool:
     return True
 
 
+def stopped(number: int, frame: FrameType | None) -> None:
+    raise SystemExit(SIGNAL_EXIT + number)
+
+
 def train_policy_forever(wrapper: str, config: Path) -> None:
+    signal.signal(signal.SIGTERM, stopped)
     settings = load_config(config)
     setup_logging(settings.log_level)
     output = tas_dir(settings)
@@ -188,8 +196,10 @@ def train_policy_forever(wrapper: str, config: Path) -> None:
     model = policy_model(env, gpu())
     experiment = start_experiment(settings, HYPERPARAMETERS)
     callback = RoundCallback(output, experiment, load_events(settings.events), settings.training.game)
-    while speedrun_alive():
-        model.learn(ROLLOUT_DECISIONS * env.num_envs, callback=callback, reset_num_timesteps=False)  # pyright: ignore[reportUnknownMemberType]
-    experiment.close()
+    try:
+        while speedrun_alive():
+            model.learn(ROLLOUT_DECISIONS * env.num_envs, callback=callback, reset_num_timesteps=False)  # pyright: ignore[reportUnknownMemberType]
+    finally:
+        experiment.close()
     env.close()
     logger.warning("The speedrun has stopped, so the policy stops with it")
