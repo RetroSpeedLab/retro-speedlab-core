@@ -1,40 +1,37 @@
-import os
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
 import msgspec
-from langfuse import Langfuse
 from loguru import logger
 from opentelemetry import trace
-from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
-from opentelemetry.trace import Span, Tracer
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk.resources import SERVICE_NAME, Resource
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.trace import Span, StatusCode, Tracer
 
-from datenwissenschaften.lab.transcript import AGENT, GENERATION, Round, Step
+from datenwissenschaften.lab.transcript import AGENT, GENERATION, TOOL, USAGE_KEYS, Round, Step
 
-LANGFUSE_KEYS = ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_BASE_URL")
 TRACER_NAME = "retro-speedlab-lab"
 TRACE_NAME = "lab round"
+SCORES_NAME = "lab scores"
 SESSION_PREFIX = "lab-run "
-ERROR_LEVEL = "ERROR"
 REJECTED = "rejected"
 DEPLOYED = "deployed"
 OUTCOMES = frozenset({REJECTED, "notes", DEPLOYED})
-BOOLEAN_SCORES = frozenset({"accepted", DEPLOYED})
 MAX_TEXT = 4000
 NANOSECONDS = 1_000_000_000
 SECONDS_PER_MINUTE = 60
 EXPORT_TIMEOUT_SECONDS = 60
-TYPE = "langfuse.observation.type"
-INPUT = "langfuse.observation.input"
-OUTPUT = "langfuse.observation.output"
-METADATA = "langfuse.observation.metadata"
-LEVEL = "langfuse.observation.level"
-MODEL = "langfuse.observation.model.name"
-USAGE = "langfuse.observation.usage_details"
-TRACE_NAME_KEY = "langfuse.trace.name"
-TRACE_TAGS = "langfuse.trace.tags"
-TRACE_METADATA = "langfuse.trace.metadata"
+TRACES_PATH = "/v1/traces"
+KIND = "lab.kind"
+INPUT = "lab.input"
+OUTPUT = "lab.output"
+MODEL = "gen_ai.response.model"
+USAGE_PREFIX = "lab.usage."
+SCORE_PREFIX = "score."
 TRACE_SESSION = "session.id"
 
 
@@ -55,26 +52,17 @@ def nanoseconds(moment: datetime) -> int:
     return int(moment.timestamp() * NANOSECONDS)
 
 
-def encoded(value: Any) -> str:
-    return msgspec.json.encode(value).decode()
-
-
 def clipped(value: Any) -> str:
-    return (value if isinstance(value, str) else encoded(value))[:MAX_TEXT]
-
-
-def exports_every_span(span: ReadableSpan) -> bool:
-    return True
+    return (value if isinstance(value, str) else msgspec.json.encode(value).decode())[:MAX_TEXT]
 
 
 def step_attributes(step: Step) -> dict[str, Any]:
-    attributes: dict[str, Any] = {TYPE: step.kind, OUTPUT: clipped(step.output)}
+    attributes: dict[str, Any] = {KIND: step.kind, OUTPUT: clipped(step.output)}
     if step.input is not None:
         attributes[INPUT] = clipped(step.input)
     if step.kind == GENERATION:
-        attributes[MODEL], attributes[USAGE] = step.name, encoded(step.usage)
-    if step.failed:
-        attributes[LEVEL] = ERROR_LEVEL
+        attributes[MODEL] = step.name
+        attributes |= {f"{USAGE_PREFIX}{name}": count for name, count in step.usage.items()}
     return attributes
 
 
@@ -94,26 +82,32 @@ class RoundExporter:
         span = self.tracer.start_span(
             step.name, context, start_time=nanoseconds(step.start), attributes=step_attributes(step)
         )
+        if step.failed:
+            span.set_status(StatusCode.ERROR)
         end = max([step.end, *(self.emit(child, span) for child in self.below(step.key))])
         span.end(end_time=nanoseconds(end))
         return end
 
 
-def session_of(run: LabRun) -> str:
-    return f"{SESSION_PREFIX}{run.stamp}"
+def session_of(stamp: str) -> str:
+    return f"{SESSION_PREFIX}{stamp}"
+
+
+def run_attributes(run: LabRun) -> dict[str, Any]:
+    return {TRACE_SESSION: session_of(run.stamp), "lab.game": run.game, "lab.stamp": run.stamp, "lab.base": run.base}
 
 
 def export_round(tracer: Tracer, run: LabRun, number: int, lab_round: Round) -> str:
-    metadata = {"stamp": run.stamp, "base": run.base, "round": number, "cost_usd": lab_round.cost}
     root = tracer.start_span(
         f"{TRACE_NAME} {number}",
         start_time=nanoseconds(lab_round.start),
         attributes={
-            TRACE_NAME_KEY: TRACE_NAME,
-            TRACE_SESSION: session_of(run),
-            TRACE_TAGS: [run.game, run.outcome],
-            TRACE_METADATA: encoded(metadata),
-            TYPE: AGENT,
+            **run_attributes(run),
+            "lab.outcome": run.outcome,
+            "lab.round": number,
+            "lab.cost_usd": lab_round.cost,
+            **round_attributes(lab_round.steps),
+            KIND: AGENT,
             OUTPUT: clipped(lab_round.result),
         },
     )
@@ -128,6 +122,29 @@ def export_run(tracer: Tracer, run: LabRun, rounds: list[Round]) -> list[str]:
     return [export_round(tracer, run, number, lab_round) for number, lab_round in enumerate(rounds, 1)]
 
 
+def usage_totals(steps: list[Step]) -> Counter[str]:
+    return sum((Counter(step.usage) for step in steps if step.kind == GENERATION), Counter[str]())
+
+
+def step_counts(steps: list[Step]) -> dict[str, float]:
+    return {
+        "turns": float(sum(step.kind == GENERATION for step in steps)),
+        "subagents": float(sum(step.kind == AGENT for step in steps)),
+        "tool_calls": float(sum(step.kind == TOOL for step in steps)),
+        "tool_errors": float(sum(step.failed for step in steps)),
+        "steps": float(len(steps)),
+        "tokens": float(usage_totals(steps).total()),
+    }
+
+
+def round_attributes(steps: list[Step]) -> dict[str, Any]:
+    models = Counter(step.name for step in steps if step.kind == GENERATION).most_common(1)
+    totals = usage_totals(steps)
+    usage = {f"{USAGE_PREFIX}{name}": totals[name] for name in USAGE_KEYS.values()}
+    counts = {f"lab.{name}": int(value) for name, value in step_counts(steps).items()}
+    return {**counts, **usage, **({MODEL: models[0][0]} if models else {})}
+
+
 def run_scores(run: LabRun, rounds: list[Round]) -> dict[str, float]:
     steps = [step for lab_round in rounds for step in lab_round.steps]
     return {
@@ -136,42 +153,38 @@ def run_scores(run: LabRun, rounds: list[Round]) -> dict[str, float]:
         "cost_usd": sum(lab_round.cost for lab_round in rounds),
         "commits": float(run.commits),
         "minutes": (rounds[-1].end - rounds[0].start).total_seconds() / SECONDS_PER_MINUTE,
-        "turns": float(sum(step.kind == GENERATION for step in steps)),
-        "subagents": float(sum(step.kind == AGENT for step in steps)),
-        "tool_errors": float(sum(step.failed for step in steps)),
+        **step_counts(steps),
     }
 
 
-def trace_run(langfuse: Langfuse, tracer: Tracer, run: LabRun, rounds: list[Round]) -> list[str]:
+def score_attributes(scores: dict[str, float]) -> dict[str, float]:
+    return {f"{SCORE_PREFIX}{name}": value for name, value in scores.items()}
+
+
+def score_session(tracer: Tracer, name: str, attributes: dict[str, Any], start: datetime, end: datetime) -> None:
+    span = tracer.start_span(name, start_time=nanoseconds(start), attributes=attributes)
+    span.end(end_time=nanoseconds(end))
+
+
+def trace_run(tracer: Tracer, run: LabRun, rounds: list[Round]) -> list[str]:
     trace_ids = export_run(tracer, run, rounds)
-    for name, value in run_scores(run, rounds).items():
-        data_type = "BOOLEAN" if name in BOOLEAN_SCORES else "NUMERIC"
-        langfuse.create_score(name=name, value=value, session_id=session_of(run), data_type=data_type)
+    attributes = {**run_attributes(run), **score_attributes(run_scores(run, rounds))}
+    score_session(tracer, SCORES_NAME, attributes, rounds[0].start, rounds[-1].end)
     return trace_ids
 
 
-def missing_langfuse_keys() -> list[str]:
-    return [key for key in LANGFUSE_KEYS if key not in os.environ]
+def exporting_provider(endpoint: str) -> TracerProvider:
+    provider = TracerProvider(resource=Resource.create({SERVICE_NAME: TRACER_NAME}))
+    exporter = OTLPSpanExporter(endpoint=f"{endpoint.rstrip('/')}{TRACES_PATH}", timeout=EXPORT_TIMEOUT_SECONDS)
+    provider.add_span_processor(BatchSpanProcessor(exporter))
+    return provider
 
 
-def langfuse_client(provider: TracerProvider) -> Langfuse:
-    return Langfuse(
-        public_key=os.environ["LANGFUSE_PUBLIC_KEY"],
-        secret_key=os.environ["LANGFUSE_SECRET_KEY"],
-        base_url=os.environ["LANGFUSE_BASE_URL"],
-        tracer_provider=provider,
-        should_export_span=exports_every_span,
-        timeout=EXPORT_TIMEOUT_SECONDS,
-    )
-
-
-def send_trace(run: LabRun, rounds: list[Round]) -> None:
-    missing = missing_langfuse_keys()
-    if missing:
-        logger.warning(f"The lab run {run.stamp} is not traced: {', '.join(missing)} not set")
+def send_trace(endpoint: str | None, run: LabRun, rounds: list[Round]) -> None:
+    if endpoint is None:
+        logger.warning(f"The lab run {run.stamp} is not traced: agent.traces is null")
         return
-    provider = TracerProvider()
-    langfuse = langfuse_client(provider)
-    trace_ids = trace_run(langfuse, provider.get_tracer(TRACER_NAME), run, rounds)
-    langfuse.shutdown()
-    logger.info(f"The lab run {run.stamp} is traced as session {session_of(run)!r} with {len(trace_ids)} rounds")
+    provider = exporting_provider(endpoint)
+    trace_ids = trace_run(provider.get_tracer(TRACER_NAME), run, rounds)
+    provider.shutdown()
+    logger.info(f"The lab run {run.stamp} is traced as session {session_of(run.stamp)!r} with {len(trace_ids)} rounds")

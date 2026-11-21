@@ -176,10 +176,12 @@ reads a finished run's Claude Code log and
 
 - publishes its numbers and a swimlane timeline of the lead agent and its
   subagents to the website (`PUT /lab-runs/{game}/{stamp}`);
-- sends it to [Langfuse](https://langfuse.com) as a session with one trace per
-  round, scored with outcome, cost, commits, duration, turns, subagents and tool
-  errors. Langfuse needs `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` and
-  `LANGFUSE_BASE_URL`.
+- exports it with OpenTelemetry over OTLP/HTTP to `agent.traces` (a
+  [Grafana Tempo](https://grafana.com/oss/tempo/) on the Home Lab), one trace per
+  round with the run's `session.id` (`lab-run STAMP`), and a `lab scores` span
+  with outcome, cost, commits, duration, turns, subagents, steps, tokens and tool
+  errors as `score.*` attributes. The next run adds a `lab progress` span with
+  the progress the run led to. With `agent.traces: null` nothing is traced.
 
 ## Events
 
@@ -267,6 +269,7 @@ when the configuration is loaded.
 | `ui.enable`, `ui.live`, `ui.release` | Relay on or off, on stream or snapshot only, and the release label |
 | `twitch.enabled` | Whether the stream page goes live on Twitch |
 | `agent.stall_minutes` | Minutes without progress before the `lab` task starts a lab run |
+| `agent.traces` | OTLP/HTTP endpoint the lab runs are traced to; `null` traces nothing |
 | `speedrun.scouts`, `speedrun.backtrackers`, `speedrun.beam_scouts`, `speedrun.vision_scouts`, `speedrun.polishers` | Search processes per role |
 | `speedrun.segment_seconds` | Seconds per segment round, doubled with each retry |
 | `speedrun.policy`, `speedrun.policy_emulators` | PPO policy on or off and its parallel environments |

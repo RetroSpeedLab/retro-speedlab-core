@@ -42,6 +42,7 @@ class UISettings:
 @dataclass(frozen=True)
 class LabSettings:
     stall_minutes: int
+    traces: str | None
 
 
 @dataclass(frozen=True)
@@ -134,7 +135,10 @@ def load_config(config_path: Path) -> RetroSpeedlabConfig:
             release=_text(ui.release, "ui.release"),
             twitch=_boolean(document.twitch.enabled, "twitch.enabled"),
         ),
-        lab=LabSettings(stall_minutes=_positive_int(document.agent.stall_minutes, "agent.stall_minutes")),
+        lab=LabSettings(
+            stall_minutes=_positive_int(document.agent.stall_minutes, "agent.stall_minutes"),
+            traces=_optional_text(document.agent.traces, "agent.traces"),
+        ),
         speedrun=SpeedrunSettings(
             scouts=_positive_int(document.speedrun.scouts, "speedrun.scouts"),
             backtrackers=_count(document.speedrun.backtrackers, "speedrun.backtrackers"),

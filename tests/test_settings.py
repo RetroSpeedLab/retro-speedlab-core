@@ -23,7 +23,7 @@ def _document() -> dict[str, Any]:
         "upload": {"url": "https://example.test", "api_key": None},
         "ui": {"enable": True, "live": True, "release": "local"},
         "twitch": {"enabled": True},
-        "agent": {"stall_minutes": 30},
+        "agent": {"stall_minutes": 30, "traces": "http://traces.test:4318"},
         "events": {"sink": None, "options": {}},
         "experiments": {"repo": "aim://experiments.test:53800", "turn": {"index": 4801, "arm": "bandit"}},
         "video": {"encoder": "h264_nvenc", "max_encoders": 3},
@@ -59,6 +59,7 @@ def test_complete_config_loads(tmp_path: Path):
     assert config.upload.api_key is None
     assert config.video.encoder is Encoder.NVENC
     assert config.experiments == ExperimentSettings("aim://experiments.test:53800", SearchTurn(4801, "bandit"))
+    assert config.lab.traces == "http://traces.test:4318"
     assert config.log_level == "INFO"
 
 

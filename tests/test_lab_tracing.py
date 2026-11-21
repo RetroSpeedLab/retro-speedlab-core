@@ -5,12 +5,12 @@ import pytest
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.trace import StatusCode
 
-from datenwissenschaften.lab import tracing
 from datenwissenschaften.lab.progress import progress_scores
 from datenwissenschaften.lab.record import summary
 from datenwissenschaften.lab.timeline import timeline
-from datenwissenschaften.lab.tracing import TRACE_SESSION, TYPE, LabRun, export_run, run_scores, send_trace
+from datenwissenschaften.lab.tracing import KIND, SCORES_NAME, TRACE_SESSION, LabRun, run_scores, send_trace, trace_run
 from datenwissenschaften.lab.transcript import AGENT, GENERATION, TOOL, read_transcript
 
 REAL_LOG = Path(__file__).with_name("claude_team.jsonl")
@@ -56,7 +56,7 @@ def spans_of(rounds: list) -> list:
     memory = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(memory))
-    export_run(provider.get_tracer("test"), RUN, rounds)
+    trace_run(provider.get_tracer("test"), RUN, rounds)
     return list(memory.get_finished_spans())
 
 
@@ -78,23 +78,26 @@ def test_subagent_work_is_nested_under_its_agent() -> None:
     spans = spans_of(read_transcript(REAL_LOG))
     agent = next(span for span in spans if span.name == "reader")
     nested = [span for span in spans if span.parent is not None and span.parent.span_id == agent.context.span_id]
-    assert agent.attributes[TYPE] == AGENT
+    assert agent.attributes[KIND] == AGENT
     assert {span.name for span in nested} == {"claude-haiku-4-5-20251001", "Read"}
     assert all(span.end_time >= span.start_time for span in spans)
 
 
-def test_a_run_without_langfuse_keys_is_not_traced(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    for key in tracing.LANGFUSE_KEYS:
-        monkeypatch.delenv(key, raising=False)
-    send_trace(RUN, read_transcript(two_rounds(tmp_path)))
+def test_a_run_without_a_traces_endpoint_is_not_traced(tmp_path: Path) -> None:
+    send_trace(None, RUN, read_transcript(two_rounds(tmp_path)))
 
 
 def test_every_round_is_a_trace_in_the_session_of_its_run(tmp_path: Path) -> None:
     spans = spans_of(read_transcript(two_rounds(tmp_path)))
     roots = [span for span in spans if span.parent is None]
-    assert [span.name for span in roots] == ["lab round 1", "lab round 2"]
+    assert [span.name for span in roots] == ["lab round 1", "lab round 2", SCORES_NAME]
     assert {span.attributes[TRACE_SESSION] for span in roots} == {"lab-run 2026-11-04T1000"}
-    assert len({span.context.trace_id for span in roots}) == 2
+    assert len({span.context.trace_id for span in roots}) == 3
+    assert roots[-1].attributes["score.cost_usd"] == 2.0 and roots[-1].attributes["score.tokens"] == 16.0
+    assert roots[0].attributes["lab.usage.input"] == 3 and roots[0].attributes["lab.tool_calls"] == 1
+    assert roots[0].attributes["gen_ai.response.model"] == "claude-opus-5-5"
+    failed = next(span for span in spans if span.name == "Bash")
+    assert failed.status.status_code is StatusCode.ERROR
 
 
 def test_the_timeline_puts_each_subagent_in_its_own_lane() -> None:

@@ -145,7 +145,7 @@ def write_config(tmp_path: Path) -> Path:
                 "upload: {url: 'https://upload.test', api_key: null}",
                 "ui: {enable: false, live: true, release: local}",
                 "twitch: {enabled: true}",
-                "agent: {stall_minutes: 30}",
+                "agent: {stall_minutes: 30, traces: null}",
                 "events: {sink: null, options: {}}",
                 "experiments: {repo: aim, turn: null}",
                 "video: {encoder: libx264, max_encoders: 2}",

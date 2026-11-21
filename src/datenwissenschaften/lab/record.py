@@ -48,7 +48,7 @@ def record_lab_run(config: Path, log: Path, stamp: str, base: str, outcome: str,
     if not rounds:
         raise ValueError(f"the lab log {log} has no finished round")
     publish_lab_run(settings, run, rounds)
-    send_trace(run, rounds)
+    send_trace(settings.lab.traces, run, rounds)
     score_previous_run(settings, stamp)
 
 

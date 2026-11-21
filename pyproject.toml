@@ -26,8 +26,8 @@ dependencies = [
     "typer==0.27.3",
     "sentry-sdk==2.73.0",
     "cachetools>=7.2.8",
-    "langfuse==5.1.0",
     "opentelemetry-sdk==1.45.2",
+    "opentelemetry-exporter-otlp-proto-http==1.45.2",
     "aim==3.29.1",
 ]
 classifiers = [

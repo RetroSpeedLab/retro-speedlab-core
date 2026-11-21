@@ -1,17 +1,25 @@
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import httpx
 import typer
 from loguru import logger
-from opentelemetry.sdk.trace import TracerProvider
 
-from datenwissenschaften.lab.tracing import SESSION_PREFIX, langfuse_client, missing_langfuse_keys
+from datenwissenschaften.lab.tracing import (
+    TRACE_SESSION,
+    TRACER_NAME,
+    exporting_provider,
+    score_attributes,
+    score_session,
+    session_of,
+)
 from datenwissenschaften.logger import setup_logging
 from datenwissenschaften.settings import RetroSpeedlabConfig, load_config
 
 TIMEOUT_SECONDS = 60.0
 PROGRESSED = "progressed"
+PROGRESS_NAME = "lab progress"
 
 
 def progress_scores(progress: dict[str, Any]) -> dict[str, float]:
@@ -29,20 +37,18 @@ def measured_runs(settings: RetroSpeedlabConfig) -> list[dict[str, Any]]:
     return [run for run in response.json() if run["game"] == game and run["progress"] is not None]
 
 
-def score_progress(runs: list[dict[str, Any]]) -> None:
-    missing = missing_langfuse_keys()
-    if missing:
-        logger.warning(f"The progress of {len(runs)} lab runs is not scored: {', '.join(missing)} not set")
+def score_progress(endpoint: str | None, runs: list[dict[str, Any]]) -> None:
+    if endpoint is None:
+        logger.warning(f"The progress of {len(runs)} lab runs is not scored: agent.traces is null")
         return
-    langfuse = langfuse_client(TracerProvider())
+    provider = exporting_provider(endpoint)
+    tracer = provider.get_tracer(TRACER_NAME)
+    now = datetime.now(UTC)
     for run in runs:
-        session = f"{SESSION_PREFIX}{run['stamp']}"
-        for name, value in progress_scores(run["progress"]).items():
-            data_type = "BOOLEAN" if name == PROGRESSED else "NUMERIC"
-            score_id = f"progress-{run['stamp']}-{name}"
-            langfuse.create_score(name=name, value=value, session_id=session, score_id=score_id, data_type=data_type)
-    langfuse.shutdown()
-    logger.info(f"The progress of {len(runs)} lab runs is scored in Langfuse")
+        attributes = {TRACE_SESSION: session_of(run["stamp"]), **score_attributes(progress_scores(run["progress"]))}
+        score_session(tracer, PROGRESS_NAME, attributes, now, now)
+    provider.shutdown()
+    logger.info(f"The progress of {len(runs)} lab runs is scored in the lab traces")
 
 
 def score_previous_run(settings: RetroSpeedlabConfig, stamp: str) -> None:
@@ -53,7 +59,7 @@ def score_previous_run(settings: RetroSpeedlabConfig, stamp: str) -> None:
     except httpx.HTTPError as error:
         logger.warning(f"The progress before lab run {stamp} was not read: {error}")
         return
-    score_progress(earlier[:1])
+    score_progress(settings.lab.traces, earlier[:1])
 
 
 app = typer.Typer()
@@ -63,7 +69,7 @@ app = typer.Typer()
 def score_all_progress(config: Path) -> None:
     settings = load_config(config)
     setup_logging(settings.log_level)
-    score_progress(measured_runs(settings))
+    score_progress(settings.lab.traces, measured_runs(settings))
 
 
 if __name__ == "__main__":
