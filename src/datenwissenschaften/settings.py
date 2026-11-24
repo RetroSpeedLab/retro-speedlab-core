@@ -56,6 +56,12 @@ class GameSettings:
 
 
 @dataclass(frozen=True)
+class SearchTurn:
+    index: int
+    arm: str
+
+
+@dataclass(frozen=True)
 class SpeedrunSettings:
     scouts: int
     backtrackers: int
@@ -67,6 +73,7 @@ class SpeedrunSettings:
     policy_emulators: int
     beam_kernel: BeamKernel
     game: GameSettings
+    turn: SearchTurn | None
 
 
 @dataclass(frozen=True)
@@ -82,18 +89,6 @@ class EventSettings:
 
 
 @dataclass(frozen=True)
-class SearchTurn:
-    index: int
-    arm: str
-
-
-@dataclass(frozen=True)
-class ExperimentSettings:
-    repo: str
-    turn: SearchTurn | None
-
-
-@dataclass(frozen=True)
 class RetroSpeedlabConfig:
     paths: RetroSpeedlabPaths
     training: TrainingSettings
@@ -102,7 +97,6 @@ class RetroSpeedlabConfig:
     lab: LabSettings
     speedrun: SpeedrunSettings
     events: EventSettings
-    experiments: ExperimentSettings
     video: VideoSettings
     log_level: str
 
@@ -150,14 +144,11 @@ def load_config(config_path: Path) -> RetroSpeedlabConfig:
             policy_emulators=_positive_int(document.speedrun.policy_emulators, "speedrun.policy_emulators"),
             beam_kernel=_beam_kernel(document.speedrun.beam_kernel),
             game=_game(collection, slug, document.speedrun),
+            turn=_search_turn(document.speedrun.turn),
         ),
         events=EventSettings(
             sink=_optional_text(document.events.sink, "events.sink"),
             options=_mapping(document.events.options, "events.options"),
-        ),
-        experiments=ExperimentSettings(
-            repo=_text(document.experiments.repo, "experiments.repo"),
-            turn=_search_turn(document.experiments.turn),
         ),
         video=VideoSettings(
             encoder=_encoder(document.video.encoder),
@@ -177,8 +168,8 @@ def _game(collection: Path, slug: str, speedrun: Any) -> GameSettings:
 def _search_turn(value: Any) -> SearchTurn | None:
     if value is None:
         return None
-    turn = _mapping(value, "experiments.turn")
-    return SearchTurn(_count(turn["index"], "experiments.turn.index"), _text(turn["arm"], "experiments.turn.arm"))
+    turn = _mapping(value, "speedrun.turn")
+    return SearchTurn(_count(turn["index"], "speedrun.turn.index"), _text(turn["arm"], "speedrun.turn.arm"))
 
 
 def _encoder(value: Any) -> Encoder:

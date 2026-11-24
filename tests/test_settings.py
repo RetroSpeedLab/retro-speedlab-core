@@ -8,7 +8,7 @@ from speedlab_engine.collection import DEMO_COLLECTION
 from speedlab_engine.video import Encoder
 
 from datenwissenschaften.kernel.batch import BeamKernel
-from datenwissenschaften.settings import ExperimentSettings, GameSettings, SearchTurn, SpeedrunSettings, load_config
+from datenwissenschaften.settings import GameSettings, SearchTurn, SpeedrunSettings, load_config
 
 
 def _document() -> dict[str, Any]:
@@ -25,7 +25,6 @@ def _document() -> dict[str, Any]:
         "twitch": {"enabled": True},
         "agent": {"stall_minutes": 30, "traces": "http://traces.test:4318"},
         "events": {"sink": None, "options": {}},
-        "experiments": {"repo": "aim://experiments.test:53800", "turn": {"index": 4801, "arm": "bandit"}},
         "video": {"encoder": "h264_nvenc", "max_encoders": 3},
         "speedrun": {
             "scouts": 3,
@@ -38,6 +37,7 @@ def _document() -> dict[str, Any]:
             "policy_emulators": 3,
             "beam_kernel": "cpu",
             "category": "Warpless",
+            "turn": {"index": 4801, "arm": "bandit"},
         },
         "log_level": "info",
     }
@@ -55,10 +55,10 @@ def test_complete_config_loads(tmp_path: Path):
     assert (config.training.game, config.training.cartridge) == ("walk", "games.walk.cartridge")
     assert config.lab.stall_minutes == 30
     game = GameSettings("walk", 1, "Walk", "1.0.0", "DEMO", "Warpless")
-    assert config.speedrun == SpeedrunSettings(3, 2, 2, 1, 2, 60.0, False, 3, BeamKernel.CPU, game)
+    turn = SearchTurn(4801, "bandit")
+    assert config.speedrun == SpeedrunSettings(3, 2, 2, 1, 2, 60.0, False, 3, BeamKernel.CPU, game, turn)
     assert config.upload.api_key is None
     assert config.video.encoder is Encoder.NVENC
-    assert config.experiments == ExperimentSettings("aim://experiments.test:53800", SearchTurn(4801, "bandit"))
     assert config.lab.traces == "http://traces.test:4318"
     assert config.log_level == "INFO"
 

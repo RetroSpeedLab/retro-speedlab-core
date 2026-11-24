@@ -1,24 +1,12 @@
-from dataclasses import dataclass, field, replace
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from fakes import RecordedEvents, write_config
 
-from datenwissenschaften.events import ATTEMPTS, RECORDS, STEPS
-from datenwissenschaften.settings import ExperimentSettings, SearchTurn, load_config
+from datenwissenschaften.events import ATTEMPTS, RECORDS, STEPS, TURN_MINUTES
+from datenwissenschaften.settings import SearchTurn, load_config
 from datenwissenschaften.speedrun.turn_tracking import TurnMinute, TurnTracking, tracked_events
-
-
-@dataclass
-class TrackedRun:
-    tracked: list[tuple[str, float, int, dict[str, str]]] = field(default_factory=list)
-    closed: bool = False
-
-    def track(self, value: float, name: str, step: int, context: dict[str, str] | None = None) -> None:
-        self.tracked.append((name, value, step, context or {}))
-
-    def close(self) -> None:
-        self.closed = True
 
 
 def attempt(role: str, worker_seconds: float, crossings: int) -> dict[str, Any]:
@@ -51,37 +39,41 @@ def test_a_minute_sums_the_search_events_per_worker_kind() -> None:
     }
 
 
-def test_each_flush_tracks_one_minute_step_and_closing_tracks_the_rest() -> None:
-    events, run = RecordedEvents(), TrackedRun()
-    tracking = TurnTracking(events, run, 300.0)
+def test_each_flush_publishes_one_minute_and_closing_publishes_the_final_one() -> None:
+    events = RecordedEvents()
+    tracking = TurnTracking(events, {"run": "r1", "game": "walk", "turn": 7}, 300.0)
     tracking.publish(ATTEMPTS, "walk", attempt("scout", 5.0, 1))
-    tracking.flush()
+    tracking.flush(False)
     tracking.publish(RECORDS, "walk", {"seconds": 290.0})
     tracking.close()
 
-    assert [topic for topic, _, _ in events.published] == [ATTEMPTS, RECORDS]
-    best = [(value, at) for name, value, at, _ in run.tracked if name == "best_seconds"]
-    assert best == [(300.0, 0), (290.0, 1)]
-    assert ("worker_share", 1.0, 0, {"kind": "scout"}) in run.tracked
-    assert [value for name, value, at, _ in run.tracked if name == "new_records"] == [0, 1]
-    assert run.closed
+    assert [topic for topic, _, _ in events.published] == [ATTEMPTS, TURN_MINUTES, RECORDS, TURN_MINUTES]
+    minutes = [payload for topic, _, payload in events.published if topic == TURN_MINUTES]
+    assert [(minute["step"], minute["best_seconds"], minute["final"]) for minute in minutes] == [
+        (0, 300.0, False),
+        (1, 290.0, True),
+    ]
+    assert minutes[0]["kinds"]["scout"]["worker_share"] == 1.0
+    assert [minute["new_records"] for minute in minutes] == [0, 1]
+    assert minutes[0]["run"] == "r1" and minutes[0]["turn"] == 7
 
 
-def test_a_search_turn_is_one_aim_run_with_the_turn_s_params(tmp_path: Path) -> None:
+def test_a_search_turn_publishes_the_turn_s_params(tmp_path: Path) -> None:
     settings = load_config(write_config(tmp_path))
     events = RecordedEvents()
     assert tracked_events(settings, events, 60.0) is events
-    turn = replace(settings, experiments=ExperimentSettings(str(tmp_path), SearchTurn(4801, "holdout")))
+    turned = replace(settings, speedrun=replace(settings.speedrun, turn=SearchTurn(4801, "holdout")))
 
-    tracking = tracked_events(turn, events, 60.0)
+    tracking = tracked_events(turned, events, 60.0)
     assert isinstance(tracking, TurnTracking)
-    run = tracking.run
-    assert (run["kind"], run["game"], run["release"], run["turn"], run["arm"]) == (
-        "search_turn",
+    tracking.close()
+    _, key, minute = events.published[-1]
+    assert key == "walk"
+    assert (minute["game"], minute["game_version"], minute["release"], minute["turn"], minute["arm"]) == (
         "walk",
+        "1.0.0",
         "local",
         4801,
         "holdout",
     )
-    assert run["workers"]["scout"] == settings.speedrun.scouts
-    tracking.close()
+    assert minute["workers"]["scout"] == settings.speedrun.scouts

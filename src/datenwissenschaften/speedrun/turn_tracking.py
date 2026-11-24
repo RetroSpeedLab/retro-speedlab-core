@@ -5,18 +5,15 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-import aim
-
-from datenwissenschaften.events import ATTEMPTS, RECORDS, STEPS, Events
-from datenwissenschaften.experiments import start_search_turn
-from datenwissenschaften.settings import RetroSpeedlabConfig
+from datenwissenschaften.events import ATTEMPTS, RECORDS, STEPS, TURN_MINUTES, Events, now, run_attributes
+from datenwissenschaften.settings import RetroSpeedlabConfig, SearchTurn
+from datenwissenschaften.speedrun.live import BACKTRACKER, BEAM_SCOUT, POLISHER, SCOUT, VISION_SCOUT
 from datenwissenschaften.speedrun.movie import frames
 from datenwissenschaften.speedrun.paths import tas_dir
 from datenwissenschaften.speedrun.record import RECORD_FILE, stored_record
 
 TRACK_SECONDS = 60.0
 STUCK = "stuck"
-KIND = "kind"
 
 
 class TurnMinute:
@@ -70,9 +67,9 @@ class TurnMinute:
 
 
 class TurnTracking:
-    def __init__(self, events: Events, run: aim.Run, best: float | None) -> None:
+    def __init__(self, events: Events, turn: dict[str, Any], best: float | None) -> None:
         self.events = events
-        self.run = run
+        self.turn = turn
         self.best = best
         self.lock = threading.Lock()
         self.minute = TurnMinute()
@@ -87,29 +84,32 @@ class TurnTracking:
                 self.best = payload["seconds"]
         self.events.publish(topic, key, payload)
 
-    def flush(self) -> None:
-        now = time.monotonic()
+    def flush(self, final: bool) -> None:
+        moment = time.monotonic()
         with self.lock:
             minute, self.minute = self.minute, TurnMinute()
-            seconds, self.started = now - self.started, now
+            seconds, self.started = moment - self.started, moment
             step, self.step = self.step, self.step + 1
             best = self.best
-        metrics = minute.metrics(seconds) | ({} if best is None else {"best_seconds": best})
-        for name, value in metrics.items():
-            self.run.track(value, name=name, step=step)  # pyright: ignore[reportUnknownMemberType]
-        for kind, values in minute.kinds().items():
-            for name, value in values.items():
-                self.run.track(value, name=name, step=step, context={KIND: kind})  # pyright: ignore[reportUnknownMemberType]
+        payload = {
+            **self.turn,
+            "step": step,
+            **minute.metrics(seconds),
+            "best_seconds": best,
+            "kinds": minute.kinds(),
+            "final": final,
+            "at": now(),
+        }
+        self.events.publish(TURN_MINUTES, self.turn["game"], payload)
 
     def track_every(self) -> None:
         while not self.stopped.wait(TRACK_SECONDS):
-            self.flush()
+            self.flush(False)
 
     def close(self) -> None:
         atexit.unregister(self.close)
         self.stopped.set()
-        self.flush()
-        self.run.close()
+        self.flush(True)
 
 
 def recorded_seconds(path: Path, frame_rate: float) -> float | None:
@@ -117,12 +117,24 @@ def recorded_seconds(path: Path, frame_rate: float) -> float | None:
     return None if stored is None or not stored.segments else frames(stored.segments) / frame_rate
 
 
+def turn_attributes(settings: RetroSpeedlabConfig, turn: SearchTurn) -> dict[str, Any]:
+    speedrun = settings.speedrun
+    workers = {
+        SCOUT: speedrun.scouts,
+        BACKTRACKER: speedrun.backtrackers,
+        BEAM_SCOUT: speedrun.beam_scouts,
+        VISION_SCOUT: speedrun.vision_scouts,
+        POLISHER: speedrun.polishers,
+    }
+    return {**run_attributes(settings), "turn": turn.index, "arm": turn.arm, "workers": workers}
+
+
 def tracked_events(settings: RetroSpeedlabConfig, events: Events, frame_rate: float) -> Events:
-    turn = settings.experiments.turn
+    turn = settings.speedrun.turn
     if turn is None:
         return events
     best = recorded_seconds(tas_dir(settings) / RECORD_FILE, frame_rate)
-    tracking = TurnTracking(events, start_search_turn(settings, turn), best)
+    tracking = TurnTracking(events, turn_attributes(settings, turn), best)
     threading.Thread(target=tracking.track_every, name="turn-tracking", daemon=True).start()
     atexit.register(tracking.close)
     return tracking

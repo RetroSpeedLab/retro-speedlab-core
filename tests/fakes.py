@@ -147,7 +147,6 @@ def write_config(tmp_path: Path) -> Path:
                 "twitch: {enabled: true}",
                 "agent: {stall_minutes: 30, traces: null}",
                 "events: {sink: null, options: {}}",
-                "experiments: {repo: aim, turn: null}",
                 "video: {encoder: libx264, max_encoders: 2}",
                 "speedrun:",
                 "  scouts: 1",
@@ -160,6 +159,7 @@ def write_config(tmp_path: Path) -> Path:
                 "  policy_emulators: 1",
                 "  beam_kernel: cartridge",
                 "  category: Any%",
+                "  turn: null",
                 "log_level: INFO",
             ]
         ),

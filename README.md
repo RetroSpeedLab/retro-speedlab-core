@@ -157,10 +157,8 @@ around one console: RAM in, a button combination out. After every round the
 policy is exported to `tas/policy.npz`, which the search workers read with numpy,
 and the shortest exit it found becomes a hint for the search.
 
-Each round's metrics are tracked in [Aim](https://aimstack.io), in the repository
-`experiments.repo` names (a local path or a remote `aim://` tracking server), one
-`ppo_round` run per policy process in the release's experiment, and published as a
-`policy.rounds` event.
+Each round's metrics are published as a `policy.rounds` event, which the lakehouse
+loads into its training tables and the Home Lab's Grafana.
 
 ## Lab
 
@@ -194,18 +192,14 @@ the game's slug; every payload carries `game` and `at`.
 |-------|-----------|---------|
 | `runs.attempts` | every finished search and polisher job | `state`, `seed`, `role`, `seconds`, `worker_seconds`, `outcome` (`crossing`, `checkpoint`, `nothing`), `crossings`, `frames`, `reached` |
 | `runs.steps` | every step of the search | `kind` (`found`, `checkpoint`, `stuck`, `improved`, `lab`, `unverified`), `state`, `frames`, `saved`, `role`, `worker_seconds` |
+| `runs.records` | a new record that replays from power-on | `version`, `frames`, `seconds`, `pieces`, `previous_frames` |
+| `runs.turn_minutes` | every minute of a search turn, and once more as `final` when it ends | the turn's `run`, `game_version`, `release`, `started_at`, `turn`, `arm`, `workers` per kind; the minute's `step`, `frames_saved`, `best_seconds`, `new_records`, `crossings`, `attempts_per_second`, `stuck_states`, `kinds` (per worker kind `frames_saved_per_worker_second` and `worker_share`), `final` |
+| `policy.rounds` | every PPO round | the policy process's `run`, `game_version`, `release`, `started_at`, `hyperparameters`; the round's `round`, `steps`, `reward`, `exits`, `episodes`, `exit_rate`, `entropy`, `explained_variance`, `loss` |
 
 `role` is the worker kind (`scout`, `backtracker`, `beam-scout`, `vision-scout`, `polisher`) and `worker_seconds` the
 wall time its worker spent on the job. A `found` or `improved` step names the job whose crossing it took; the other
-steps have no worker and carry `null`.
-| `runs.records` | a new record that replays from power-on | `version`, `frames`, `seconds`, `pieces`, `previous_frames` |
-| `policy.rounds` | every PPO round | `run`, `round`, `steps`, `reward`, `exits`, `episodes`, `exit_rate`, `entropy`, `explained_variance`, `loss` |
-
-With `experiments.turn` set, the search also sums these events in memory and tracks them once a minute in a
-`search_turn` Aim run (params `game`, `game_version`, `release`, `turn`, `arm`, `workers`): `frames_saved`,
-`best_seconds`, `new_records`, `crossings`, `attempts_per_second`, `stuck_states`, and per worker kind, in the context
-`{"kind": role}`, `frames_saved_per_worker_second` and `worker_share`. Search turns and PPO runs also track the host's
-CPU, memory and GPU every 30 seconds.
+steps have no worker and carry `null`. `runs.turn_minutes` is published only with `speedrun.turn` set; `run` is a
+random id per search turn or policy process.
 
 ## Live relay
 
@@ -275,11 +269,10 @@ when the configuration is loaded.
 | `speedrun.policy`, `speedrun.policy_emulators` | PPO policy on or off and its parallel environments |
 | `speedrun.beam_kernel` | How the beam scout steps its candidates: `cartridge` one at a time in Python, `cpu` or `cuda` in batches through the game's kernel |
 | `speedrun.category` | The category run |
+| `speedrun.turn` | The rotation turn the search runs in, `index` and bandit `arm`; with a turn the search publishes `runs.turn_minutes`, `null` publishes none |
 | `video.encoder` | `libx264` encodes on the CPU, `h264_nvenc` on an NVIDIA GPU |
 | `video.max_encoders` | Encodes at once across every process on the host, below a GeForce's NVENC session limit |
 | `events.sink`, `events.options` | Event sink and its options; `null` publishes nothing |
-| `experiments.repo` | Aim repository of the policy runs and search turns: a local path or an `aim://` tracking server |
-| `experiments.turn` | The rotation turn the search runs in, `index` and bandit `arm`; with a turn the search is tracked in Aim, `null` tracks nothing |
 | `log_level` | Loguru log level |
 
 ## Checks

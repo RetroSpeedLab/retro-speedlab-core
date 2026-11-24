@@ -2,12 +2,11 @@ import random
 from pathlib import Path
 from types import SimpleNamespace
 
-import aim
 import msgspec
 import numpy as np
 import pytest
 import torch
-from fakes import RecordedEvents
+from fakes import RecordedEvents, write_config
 from stable_baselines3.common.vec_env import DummyVecEnv
 from test_tas import START, LineRunner
 
@@ -17,7 +16,8 @@ from datenwissenschaften.policy import trainer as trainer_module
 from datenwissenschaften.policy.env import EPISODE_DECISIONS, EXIT, PolicyEnv
 from datenwissenschaften.policy.prior import POLICY_FILE, PolicyPrior, observation
 from datenwissenschaften.policy.starts import openings
-from datenwissenschaften.policy.trainer import RoundCallback, export_policy, policy_model
+from datenwissenschaften.policy.trainer import RoundCallback, export_policy, policy_model, training_run
+from datenwissenschaften.settings import load_config
 from datenwissenschaften.speedrun.archive_store import save_archive
 from datenwissenschaften.speedrun.archives import archive_key
 from datenwissenschaften.speedrun.live import read_reports
@@ -97,18 +97,17 @@ def test_ppo_rounds_export_the_policy_and_keep_the_shortest_way_out(
     monkeypatch.setattr(trainer_module, "MINIBATCH", 32)
     model = policy_model(DummyVecEnv([lambda: line_env]), CPU)
     events = RecordedEvents()
-    experiment = aim.Run(
-        repo=str(tmp_path), experiment="local", capture_terminal_logs=False, system_tracking_interval=None
-    )
-    callback = RoundCallback(tmp_path, experiment, events, "walk")
+    run = training_run(load_config(write_config(tmp_path)))
+    callback = RoundCallback(tmp_path, run, events)
 
     model.learn(128, callback=callback)
     model.learn(64, callback=callback, reset_num_timesteps=False)
 
     published = [(topic, key, payload["round"]) for topic, key, payload in events.published]
     assert published[0] == ("policy.rounds", "walk", 1)
-    assert events.published[0][2]["run"] == experiment.hash
-    assert "policy/reward" in {metric.name for metric in experiment.metrics()}
+    first = events.published[0][2]
+    assert (first["run"], first["release"], first["game_version"]) == (run["run"], "local", "1.0.0")
+    assert first["hyperparameters"]["category"] == "Any%" and "reward" in first
     assert "loss" in events.published[-1][2] and "entropy" in events.published[-1][2]
     assert PolicyPrior(tmp_path / POLICY_FILE).probabilities(np.zeros(1, dtype=np.uint8), 3) is not None
     assert [report.mode for report in read_reports(tmp_path / "live")] == ["policy"]
