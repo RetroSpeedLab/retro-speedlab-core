@@ -18,11 +18,11 @@ jobs:
       run:
         working-directory: retro-speedlab-core
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: retro-speedlab-core
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: RetroSpeedLab/retro-speedlab-engine
           ssh-key: ${{ secrets.ENGINE_DEPLOY_KEY }}
